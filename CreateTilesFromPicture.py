@@ -11,13 +11,19 @@ ERR = 'ERR'
 X = 0
 Y = 1
 
+NO_DBLK = 0
+ACROSS_TILE_DBLK = 1
+EQUAL_BOUNDS_DBLK = 2
+
 g_do_log = False
 g_log_file = None
 
 def ParseCommandLineArgs():
-	size_def = '(0,0)'
 	in_def = './in.png'
 	out_def = './out'
+	size_def = '(0,0)'
+	dblk_def = 1
+	
 	log_def = False
 	
 	prog_desc = ('Given a path to an image, ' 
@@ -26,26 +32,33 @@ def ParseCommandLineArgs():
 		'which will be deposited in the given out directory. '
 		'NOTE 1: If the image size is not divisible by the crop size, "partial tiles" will not be output. '
 		'NOTE 2: This program will not produce good results for lossy codecs such as jpeg')
-	size_help = ('The width and height (comma-separated) of each tile to be taken from the image. '
-		'Example formats: "1,2", "(1,2)". ')
 	in_help = ('Path to the image that will have tiles made out of it. '
 		'The name should include the extension, which dictates the image format of the output. '
 		'Default: ' + in_def)
 	out_help = ('Path to the directory which will contain the output tiles. '
 		'Default: ' + out_def)
+	size_help = ('The width and height (comma-separated) of each tile to be taken from the image. '
+		'Example formats: "1,2", "(1,2)". '
+		'Default: ' + size_def)
+	dblk_help = ('The deblock mode. '
+		'0: No deblocking. '
+		'1: Some deblocking: average pixels between two tile boundaries. '
+		'2: Most deblocking: average pixels across all of a given tile\'s boundaries. '
+		'Default: ' + str(dblk_def))
 	log_help = ('If set, log warnings and errors to "' + LOG_NAME + '" file. '
 		'If not set, only report errors to stdout. '
 		'Default: ' + str(log_def))
 	no_log_help = ('If set, disable logging. Default: ' + str(not log_def))
 	
 	parser = argparse.ArgumentParser(description = prog_desc)
-	parser.add_argument('--crop_size',    '-s', type = str,                           help = size_help)
 	parser.add_argument('--in_im_path',   '-i', type = str,                           help = in_help)
 	parser.add_argument('--out_dir_path', '-o', type = str,                           help = out_help)
+	parser.add_argument('--crop_size',    '-s', type = str,                           help = size_help)
+	parser.add_argument('--dblk_mode',    '-d', type = int,                           help = dblk_help)
 	parser.add_argument('--log',          '-l', dest = 'log', action = 'store_true',  help = log_help)
 	parser.add_argument('--no-log',             dest = 'log', action = 'store_false', help = no_log_help)
 	
-	parser.set_defaults(crop_size = size_def, in_im_path = in_def, out_dir_path = out_def, log = log_def)
+	parser.set_defaults(crop_size = size_def, in_im_path = in_def, out_dir_path = out_def, dblk_mode = dblk_def, log = log_def)
 
 	args = parser.parse_args()
 	
@@ -119,10 +132,19 @@ def IsValid2DSize(x):
 def AvgColor(c_list):
 	c_list = tuple([t[i] for t in c_list] for i in range(len(c_list[0])))
 	return tuple(sum(l)//len(l) for l in c_list)
-	
-def Deblock(im, crop_size):
+
+def DeblockAcrossTiles(im, crop_size):
 	#Given an image and a crop size, average the colors across all tile boundaries
-	#This is step allows the user to use the output tiles with CreatePictureFromTiles.py
+	#This step allows the user to use the output tiles with CreatePictureFromTiles.py
+	#  such that an image can be put back together in the same manner that it was taken apart.
+	#Example: Output of a 3x3 pixel tile, where each number represents an unique color:
+	# 0   0 1 2   2
+	#    - - - -
+	# 0 | 0 1 2 | 2
+	# 3 | 3 x 4 | 4
+	# 5 | 5 6 7 | 7
+	#    - - - - 
+	# 5   5 6 7   7
 
 	if im == None or not IsValid2DSize(crop_size):
 		return None
@@ -180,6 +202,30 @@ def Deblock(im, crop_size):
 
 	return im
 
+def DeblockEqualizeTileBoundaries(in_im, crop_size):
+	#Given an image and a crop size, make all pixels along the tile boundaries equal to each other
+	#This is step allows the user to use the output tiles with CreatePictureFromTiles.py
+	#  such that the tiles can be combined in strange and unusual ways.
+	#Example: Output of a 3x3 pixel tile, where each number represents an unique color:
+	# 0   0 1 0   0
+	#    - - - -
+	# 0 | 0 1 0 | 0
+	# 1 | 1 x 1 | 1
+	# 0 | 0 1 0 | 0
+	#    - - - - 
+	# 0   0 1 0   0
+
+	if im == None or not IsValid2DSize(crop_size):
+		return None
+	
+	#essentially a shallow pointer of pixel data
+	pixels = im.load() 
+	
+	im_width_in_tiles = im.size[X] // crop_size[X]
+	im_height_in_tiles = im.size[Y] // crop_size[Y]
+	
+	return im
+	
 def Crop(im, crop_size, out_dir_path, in_im_filename, in_im_file_ext):
 	#Given an image, split it up into many smaller images across the boundaries made along the crop_size.
 	#Output these images into the output directory path
@@ -229,7 +275,17 @@ def Main():
 	except AttributeError:
 		pass
 	
-	dblk_im = Deblock(in_im, crop_size)
+	#Deblock
+	if args.dblk_mode == ACROSS_TILE_DBLK:
+		dblk_im = DeblockAcrossTiles(in_im, crop_size)
+	elif args.dblk_mode == EQUAL_BOUNDS_DBLK:
+		dblk_im = DeblockEqualizeTileBoundaries(in_im, crop_size)
+	else:
+		if args.dblk_mode is not NO_DBLK:
+			Log(ERR, 'dblk_mode is "' + str(args.dblk_mode) + '", which is not an actual mode. No deblocking will be used.')
+		dblk_im = in_im
+		
+	#Crop
 	(in_im_filename, in_im_file_ext) = os.path.splitext(args.in_im_path)
 	Crop(dblk_im, crop_size, args.out_dir_path, in_im_filename, in_im_file_ext)
 
