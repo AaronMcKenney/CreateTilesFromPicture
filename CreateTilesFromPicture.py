@@ -3,6 +3,7 @@ import argparse
 import os
 import os.path
 import re
+import math
 
 LOG_NAME = 'CreateTilesFromPicture_LOG.txt'
 WARN = 'WARN'
@@ -41,9 +42,9 @@ def ParseCommandLineArgs():
 		'Example formats: "1,2", "(1,2)". '
 		'Default: ' + size_def)
 	dblk_help = ('The deblock mode. '
-		'0: No deblocking. '
-		'1: Some deblocking: average pixels between two tile boundaries. '
-		'2: Most deblocking: average pixels across all of a given tile\'s boundaries. '
+		'' + str(NO_DBLK) + ': No deblocking. '
+		'' + str(ACROSS_TILE_DBLK) + ': Some deblocking: average pixels between two tile boundaries. '
+		'' + str(EQUAL_BOUNDS_DBLK) + ': Most deblocking: average pixels across all of a given tile\'s boundaries. '
 		'Default: ' + str(dblk_def))
 	log_help = ('If set, log warnings and errors to "' + LOG_NAME + '" file. '
 		'If not set, only report errors to stdout. '
@@ -133,6 +134,69 @@ def AvgColor(c_list):
 	c_list = tuple([t[i] for t in c_list] for i in range(len(c_list[0])))
 	return tuple(sum(l)//len(l) for l in c_list)
 
+def EqualizeTileBoundaries(im, crop_size):
+	#Given an image and a crop size, make all pixels along the tile boundaries equal to each other
+	#This step allows the user to use the output tiles with CreatePictureFromTiles.py
+	#  such that a given can be combined with itself in strange and unusual ways.
+	#Example: Output of a 3x3 pixel tile, where each number represents an unique color:
+	#  - - - - - -
+	# | 0 1 2 1 0 |
+	# | 1 x x x 1 |
+	# | 2 x x x 2 |
+	# | 1 x x x 1 |
+	# | 0 1 2 1 0 |
+	#  - - - - - -
+
+	if im == None or not IsValid2DSize(crop_size):
+		return None
+	
+	#essentially a shallow pointer of pixel data
+	pixels = im.load() 
+	
+	isSquare = crop_size[X] == crop_size[Y]
+	im_width_in_tiles = im.size[X] // crop_size[X]
+	im_height_in_tiles = im.size[Y] // crop_size[Y]
+	
+	#Average the color of all pixels residing on the crop boundaries
+	#in an iterative fashion that prevents a pixel from being averaged more than once.
+	for tile_y in range(im_height_in_tiles):
+		for tile_x in range(im_width_in_tiles):
+			tile_start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
+			tile_end_pos = (tile_start_pos[X] + crop_size[X]-1, tile_start_pos[Y] + crop_size[Y]-1)
+			
+			#For now, assume that the crop size is a perfect square. Handle rectangles later.
+			if isSquare:
+				for i in range(math.ceil(crop_size[X] / 2)):
+					#Note: if (i == 0 or (i == len() - 1 and len() % 2 is not 0))
+					#  Then technically only four pixels need to be averaged.
+					#  However the math works out either way, 
+					#    as (x1 + x2 + ... + xn) / n == (x1 + x2 + ... + xn + x1 + x2 + ... + xn) / 3*n
+					c_list = [0]*8
+					c_list[0] = pixels[tile_start_pos[X]+i, tile_start_pos[Y]]
+					c_list[1] = pixels[tile_end_pos[X]-i,   tile_start_pos[Y]]
+					c_list[2] = pixels[tile_start_pos[X],   tile_start_pos[Y]+i]
+					c_list[3] = pixels[tile_end_pos[X],     tile_start_pos[Y]+i]
+					c_list[4] = pixels[tile_start_pos[X],   tile_end_pos[Y]-i]
+					c_list[5] = pixels[tile_end_pos[X],     tile_end_pos[Y]-i]
+					c_list[6] = pixels[tile_start_pos[X]+i, tile_end_pos[Y]]
+					c_list[7] = pixels[tile_end_pos[X]-i,   tile_end_pos[Y]]
+					
+					c = AvgColor(c_list)
+					pixels[tile_start_pos[X]+i, tile_start_pos[Y]]   = c
+					pixels[tile_end_pos[X]-i,   tile_start_pos[Y]]   = c
+					pixels[tile_start_pos[X],   tile_start_pos[Y]+i] = c
+					pixels[tile_end_pos[X],     tile_start_pos[Y]+i] = c
+					pixels[tile_start_pos[X],   tile_end_pos[Y]-i]   = c
+					pixels[tile_end_pos[X],     tile_end_pos[Y]-i]   = c
+					pixels[tile_start_pos[X]+i, tile_end_pos[Y]]     = c
+					pixels[tile_end_pos[X]-i,   tile_end_pos[Y]]     = c
+			else:
+				#For now, assume that the crop size is a perfect square. Handle rectangles later.
+				pass
+			
+	
+	return im
+	
 def DeblockAcrossTiles(im, crop_size):
 	#Given an image and a crop size, average the colors across all tile boundaries
 	#This step allows the user to use the output tiles with CreatePictureFromTiles.py
@@ -159,71 +223,47 @@ def DeblockAcrossTiles(im, crop_size):
 	#in an iterative fashion that prevents a pixel from being averaged more than once.
 	for tile_y in range(im_height_in_tiles):
 		for tile_x in range(im_width_in_tiles):
-			start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
-			end_pos = (start_pos[X] + crop_size[X]-1, start_pos[Y] + crop_size[Y]-1)
+			tile_start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
+			tile_end_pos = (tile_start_pos[X] + crop_size[X]-1, tile_start_pos[Y] + crop_size[Y]-1)
 			
 			if tile_y < im_height_in_tiles - 1:
 				#Average colors across the bottom boundary of the current tile,
 				#Except for the bottom-left corner of the tile if this tile isn't left-most,
 				#Except for the bottom-right corner of the tile if this tile isn't right-most.
-				start_pos_x = start_pos[X]+1
-				end_pos_x = end_pos[X]
+				start_pos_x = tile_start_pos[X]+1
+				end_pos_x = tile_end_pos[X]
 				if tile_x == 0:
 					start_pos_x -= 1
 				if tile_x == im_width_in_tiles - 1:
 					end_pos_x += 1
 					
 				for k in range(start_pos_x, end_pos_x):
-					pixels[k,end_pos[Y]] = AvgColor([pixels[k,end_pos[Y]], pixels[k,end_pos[Y]+1]])
-					pixels[k,end_pos[Y]+1] = pixels[k,end_pos[Y]]
+					pixels[k,tile_end_pos[Y]] = AvgColor([pixels[k,tile_end_pos[Y]], pixels[k,tile_end_pos[Y]+1]])
+					pixels[k,tile_end_pos[Y]+1] = pixels[k,tile_end_pos[Y]]
 			
 			if tile_x < im_width_in_tiles - 1:
 				#Average colors across the right boundary of the current tile,
 				#Except for the top-right corner of the tile if this tile isn't top-most,
 				#Except for the bottom-right corner of the tile if this tile isn't bottom-most.
-				start_pos_y = start_pos[Y]+1
-				end_pos_y = end_pos[Y]
+				start_pos_y = tile_start_pos[Y]+1
+				end_pos_y = tile_end_pos[Y]
 				if tile_y == 0:
 					start_pos_y -= 1
 				if tile_y == im_height_in_tiles - 1:
 					end_pos_y += 1
 					
 				for k in range(start_pos_y, end_pos_y):
-					pixels[end_pos[X],k] = AvgColor([pixels[end_pos[X],k], pixels[end_pos[X]+1,k]])
-					pixels[end_pos[X]+1,k] = pixels[end_pos[X],k]
+					pixels[tile_end_pos[X],k] = AvgColor([pixels[tile_end_pos[X],k], pixels[tile_end_pos[X]+1,k]])
+					pixels[tile_end_pos[X]+1,k] = pixels[tile_end_pos[X],k]
 			
 			if tile_x < im_width_in_tiles - 1 and tile_y < im_height_in_tiles - 1:
 				#Average the bottom-right most corner with its bottom, right, and bottom-right neighbors.
-				c_list = [pixels[end_pos[X],end_pos[Y]],   pixels[end_pos[X]+1, end_pos[Y]],
-						  pixels[end_pos[X],end_pos[Y]+1], pixels[end_pos[X]+1, end_pos[Y]+1]]
+				c_list = [pixels[tile_end_pos[X],tile_end_pos[Y]],   pixels[tile_end_pos[X]+1, tile_end_pos[Y]],
+						  pixels[tile_end_pos[X],tile_end_pos[Y]+1], pixels[tile_end_pos[X]+1, tile_end_pos[Y]+1]]
 				c = AvgColor(c_list)
-				pixels[end_pos[X],end_pos[Y]]   = pixels[end_pos[X]+1, end_pos[Y]]   = c
-				pixels[end_pos[X],end_pos[Y]+1] = pixels[end_pos[X]+1, end_pos[Y]+1] = c
+				pixels[tile_end_pos[X],tile_end_pos[Y]]   = pixels[tile_end_pos[X]+1, tile_end_pos[Y]]   = c
+				pixels[tile_end_pos[X],tile_end_pos[Y]+1] = pixels[tile_end_pos[X]+1, tile_end_pos[Y]+1] = c
 
-	return im
-
-def DeblockEqualizeTileBoundaries(in_im, crop_size):
-	#Given an image and a crop size, make all pixels along the tile boundaries equal to each other
-	#This is step allows the user to use the output tiles with CreatePictureFromTiles.py
-	#  such that the tiles can be combined in strange and unusual ways.
-	#Example: Output of a 3x3 pixel tile, where each number represents an unique color:
-	# 0   0 1 0   0
-	#    - - - -
-	# 0 | 0 1 0 | 0
-	# 1 | 1 x 1 | 1
-	# 0 | 0 1 0 | 0
-	#    - - - - 
-	# 0   0 1 0   0
-
-	if im == None or not IsValid2DSize(crop_size):
-		return None
-	
-	#essentially a shallow pointer of pixel data
-	pixels = im.load() 
-	
-	im_width_in_tiles = im.size[X] // crop_size[X]
-	im_height_in_tiles = im.size[Y] // crop_size[Y]
-	
 	return im
 	
 def Crop(im, crop_size, out_dir_path, in_im_filename, in_im_file_ext):
@@ -279,7 +319,10 @@ def Main():
 	if args.dblk_mode == ACROSS_TILE_DBLK:
 		dblk_im = DeblockAcrossTiles(in_im, crop_size)
 	elif args.dblk_mode == EQUAL_BOUNDS_DBLK:
-		dblk_im = DeblockEqualizeTileBoundaries(in_im, crop_size)
+		#TODO: Remove this dumb for loop. Replace it with something less hacky.
+		for i in range(10):
+			dblk_im = EqualizeTileBoundaries(in_im, crop_size)
+			dblk_im = DeblockAcrossTiles(in_im, crop_size)
 	else:
 		if args.dblk_mode is not NO_DBLK:
 			Log(ERR, 'dblk_mode is "' + str(args.dblk_mode) + '", which is not an actual mode. No deblocking will be used.')
