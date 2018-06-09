@@ -110,7 +110,9 @@ def GetImageFromPath(im_path):
 
 def GetTupleFromStr(tuple_str):
 	#allow for various ways of sending in tuples, including "1,1" and "(1,1)"
-	tuple_str_arr = re.split('\s|,', tuple_str)
+	tuple_str = re.sub('[(){}<>]', '', tuple_str)
+	tuple_str_arr = re.split('\s|,|x|X', tuple_str)
+	tuple_str_arr = list(filter(None, tuple_str_arr))
 	
 	int_arr = []
 	for tuple_str_i in tuple_str_arr:
