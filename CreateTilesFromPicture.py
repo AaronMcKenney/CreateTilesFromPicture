@@ -24,6 +24,7 @@ def ParseCommandLineArgs():
 	out_def = './out'
 	size_def = '(0,0)'
 	dblk_def = 1
+	clusters_def = 1
 	
 	log_def = False
 	
@@ -41,6 +42,9 @@ def ParseCommandLineArgs():
 	size_help = ('The width and height (comma-separated) of each tile to be taken from the image. '
 		'Example formats: "1,2", "(1,2)". '
 		'Default: ' + size_def)
+	clusters_help = ('If the number of clusters provided is greater than 1, a clustering algorithm '
+		'will be used to organize the tiles into n directories of like images. '
+		'Default: ' + str(clusters_def))
 	dblk_help = ('The deblock mode. '
 		'' + str(NO_DBLK) + ': No deblocking. '
 		'' + str(ACROSS_TILE_DBLK) + ': Some deblocking: average pixels between two tile boundaries. '
@@ -55,11 +59,12 @@ def ParseCommandLineArgs():
 	parser.add_argument('--in_im_path',   '-i', type = str,                           help = in_help)
 	parser.add_argument('--out_dir_path', '-o', type = str,                           help = out_help)
 	parser.add_argument('--crop_size',    '-s', type = str,                           help = size_help)
+	parser.add_argument('--num_clusters', '-c', type = int,                           help = dblk_help)
 	parser.add_argument('--dblk_mode',    '-d', type = int,                           help = dblk_help)
 	parser.add_argument('--log',          '-l', dest = 'log', action = 'store_true',  help = log_help)
 	parser.add_argument('--no-log',             dest = 'log', action = 'store_false', help = no_log_help)
 	
-	parser.set_defaults(crop_size = size_def, in_im_path = in_def, out_dir_path = out_def, dblk_mode = dblk_def, log = log_def)
+	parser.set_defaults(crop_size = size_def, in_im_path = in_def, out_dir_path = out_def, dblk_mode = dblk_def, num_clusters = clusters_def, log = log_def)
 
 	args = parser.parse_args()
 	
@@ -268,11 +273,29 @@ def DeblockAcrossTiles(im, crop_size):
 
 	return im
 	
-def Crop(im, crop_size, out_dir_path, in_im_filename, in_im_file_ext):
+def Crop(im, crop_size):
 	#Given an image, split it up into many smaller images across the boundaries made along the crop_size.
 	#Output these images into the output directory path
 	
 	if im == None or not IsValid2DSize(crop_size):
+		return []
+	
+	im_width_in_tiles = im.size[X] // crop_size[X]
+	im_height_in_tiles = im.size[Y] // crop_size[Y]
+	
+	im_list = []
+	for tile_y in range(im_height_in_tiles):
+		for tile_x in range(im_width_in_tiles):
+			start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
+			new_im = im.crop((start_pos[X], start_pos[Y], start_pos[X] + crop_size[X], start_pos[Y] + crop_size[Y]))
+			
+			im_list.append((new_im, tile_y, tile_x))
+			
+	
+	return im_list
+
+def SaveImages(im_list, out_dir_path, in_im_filename, in_im_file_ext):
+	if im_list == []:
 		return
 	
 	try:
@@ -280,27 +303,20 @@ def Crop(im, crop_size, out_dir_path, in_im_filename, in_im_file_ext):
 			os.makedirs(out_dir_path)
 	except OSError as e:
 		Log(ERR, str(err))
-		return
+		return []
 	
-	im_width_in_tiles = im.size[X] // crop_size[X]
-	im_height_in_tiles = im.size[Y] // crop_size[Y]
-	
-	for tile_y in range(im_height_in_tiles):
-		for tile_x in range(im_width_in_tiles):
-			start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
-			new_im = im.crop((start_pos[X], start_pos[Y], start_pos[X] + crop_size[X], start_pos[Y] + crop_size[Y]))
-			
-			new_im_path = os.path.join(out_dir_path, in_im_filename) + '_' + str(tile_y) + '_' + str(tile_x) + in_im_file_ext
-			try:
-				new_im.save(new_im_path)
-			except OSError as err:
-				Log(ERR, str(err))
-				#If one save failed, the rest probably will also fail for the same reason.
-				#As such, return now so that the log does not become full of error messages.
-				Log(ERR, 'Halting crop operation due to file save error.')
-				return
-	return
-	
+	for (new_im, tile_y, tile_x) in im_list:
+		new_im_path = os.path.join(out_dir_path, in_im_filename) + '_' + str(tile_y) + '_' + str(tile_x) + in_im_file_ext
+		
+		try:
+			new_im.save(new_im_path)
+		except OSError as err:
+			Log(ERR, str(err))
+			#If one save failed, the rest probably will also fail for the same reason.
+			#As such, return now so that the log does not become full of error messages.
+			Log(ERR, 'Halting crop operation due to file save error.')
+			return
+
 def Main():
 	args = ParseCommandLineArgs()
 	
@@ -331,9 +347,12 @@ def Main():
 		dblk_im = in_im
 		
 	#Crop
-	(in_im_filename, in_im_file_ext) = os.path.splitext(args.in_im_path)
-	Crop(dblk_im, crop_size, args.out_dir_path, in_im_filename, in_im_file_ext)
+	im_list = Crop(dblk_im, crop_size)
 
+	#Save
+	(in_im_filename, in_im_file_ext) = os.path.splitext(args.in_im_path)
+	SaveImages(im_list, args.out_dir_path, in_im_filename, in_im_file_ext)
+	
 	CloseLog()
 	
 if __name__ == "__main__":
