@@ -19,6 +19,13 @@ EQUAL_BOUNDS_DBLK = 2
 g_do_log = False
 g_log_file = None
 
+class Tile:
+	def __init__(self, im, tile_pos):
+		self.im = im
+		self.x = tile_pos[X]
+		self.y = tile_pos[Y]
+		self.cluster_id = 0
+
 def ParseCommandLineArgs():
 	in_def = './in.png'
 	out_def = './out'
@@ -278,24 +285,23 @@ def Crop(im, crop_size):
 	#Output these images into the output directory path
 	
 	if im == None or not IsValid2DSize(crop_size):
-		return []
+		return {}
 	
 	im_width_in_tiles = im.size[X] // crop_size[X]
 	im_height_in_tiles = im.size[Y] // crop_size[Y]
 	
-	im_list = []
+	tile_list = []
 	for tile_y in range(im_height_in_tiles):
 		for tile_x in range(im_width_in_tiles):
 			start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
 			new_im = im.crop((start_pos[X], start_pos[Y], start_pos[X] + crop_size[X], start_pos[Y] + crop_size[Y]))
 			
-			im_list.append((new_im, tile_y, tile_x))
-			
+			tile_list.append(Tile(new_im, (tile_x, tile_y)))
 	
-	return im_list
+	return tile_list
 
-def SaveImages(im_list, out_dir_path, in_im_filename, in_im_file_ext):
-	if im_list == []:
+def SaveImages(tile_list, out_dir_path, in_im_filename, in_im_file_ext):
+	if tile_list == []:
 		return
 	
 	try:
@@ -305,11 +311,11 @@ def SaveImages(im_list, out_dir_path, in_im_filename, in_im_file_ext):
 		Log(ERR, str(err))
 		return []
 	
-	for (new_im, tile_y, tile_x) in im_list:
-		new_im_path = os.path.join(out_dir_path, in_im_filename) + '_' + str(tile_y) + '_' + str(tile_x) + in_im_file_ext
+	for tile in tile_list:
+		new_im_path = os.path.join(out_dir_path, in_im_filename) + '_' + str(tile.y) + '_' + str(tile.x) + in_im_file_ext
 		
 		try:
-			new_im.save(new_im_path)
+			tile.im.save(new_im_path)
 		except OSError as err:
 			Log(ERR, str(err))
 			#If one save failed, the rest probably will also fail for the same reason.
@@ -347,11 +353,11 @@ def Main():
 		dblk_im = in_im
 		
 	#Crop
-	im_list = Crop(dblk_im, crop_size)
+	tile_list = Crop(dblk_im, crop_size)
 
 	#Save
 	(in_im_filename, in_im_file_ext) = os.path.splitext(args.in_im_path)
-	SaveImages(im_list, args.out_dir_path, in_im_filename, in_im_file_ext)
+	SaveImages(tile_list, args.out_dir_path, in_im_filename, in_im_file_ext)
 	
 	CloseLog()
 	
