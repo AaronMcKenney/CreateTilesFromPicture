@@ -349,7 +349,7 @@ def SaveImages(tile_list, num_clusters, out_dir_path, in_im_filename, in_im_file
 		if num_clusters > 1:
 			for i in range(num_clusters):
 				os.makedirs(os.path.join(out_dir_path, str(i)))
-	except OSError as e:
+	except OSError as err:
 		Log(ERR, str(err))
 		return []
 	
@@ -405,7 +405,8 @@ def Main():
 	FindClusters(tile_list, args.num_clusters)
 
 	#Save
-	(in_im_filename, in_im_file_ext) = os.path.splitext(args.in_im_path)
+	(in_im_filepath, in_im_file_ext) = os.path.splitext(args.in_im_path)
+	in_im_filename = os.path.basename(in_im_filepath)
 	SaveImages(tile_list, args.num_clusters, args.out_dir_path, in_im_filename, in_im_file_ext)
 	
 	CloseLog()
