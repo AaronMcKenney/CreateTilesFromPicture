@@ -1,4 +1,5 @@
 from PIL import Image
+from sklearn.cluster import KMeans
 import argparse
 import os
 import os.path
@@ -12,6 +13,10 @@ ERR = 'ERR'
 X = 0
 Y = 1
 
+R = 0
+G = 1
+B = 2
+
 NO_DBLK = 0
 ACROSS_TILE_DBLK = 1
 EQUAL_BOUNDS_DBLK = 2
@@ -20,10 +25,11 @@ g_do_log = False
 g_log_file = None
 
 class Tile:
-	def __init__(self, im, tile_pos):
+	def __init__(self, im, tile_pos, id):
 		self.im = im
 		self.x = tile_pos[X]
 		self.y = tile_pos[Y]
+		self.id = id
 		self.cluster_id = 0
 
 def ParseCommandLineArgs():
@@ -296,23 +302,63 @@ def Crop(im, crop_size):
 			start_pos = (tile_x*crop_size[X], tile_y*crop_size[Y])
 			new_im = im.crop((start_pos[X], start_pos[Y], start_pos[X] + crop_size[X], start_pos[Y] + crop_size[Y]))
 			
-			tile_list.append(Tile(new_im, (tile_x, tile_y)))
+			tile_list.append(Tile(new_im, (tile_x, tile_y), tile_x + tile_y * im_width_in_tiles))
 	
 	return tile_list
 
-def SaveImages(tile_list, out_dir_path, in_im_filename, in_im_file_ext):
+def FindClusters(tile_list, num_clusters):
+	if tile_list == [] or num_clusters < 2:
+		return
+	
+	#Each row will have pixel data from one tile
+	tile_data_matrix = []
+	
+	curr_tile_id = 0
+	for tile in tile_list:
+		if not (curr_tile_id == tile.id):
+			Log(ERR, 'tile list is out of order, clustering will be incorrect')
+			return
+			
+		#essentially a shallow pointer of pixel data
+		pixels = tile.im.load()
+		
+		tile_data_array = []
+		for pix_y in range(tile.im.size[Y]):
+			for pix_x in range(tile.im.size[X]):
+				pix_tup = pixels[pix_x, pix_y]
+				tile_data_array += [pix_tup[R], pix_tup[G], pix_tup[B]]
+			
+		tile_data_matrix.append(tile_data_array)
+		
+		curr_tile_id += 1
+	
+	kmeans = KMeans(n_clusters = num_clusters, random_state = 0).fit(tile_data_matrix)
+	for i, cluster_id in enumerate(kmeans.labels_):
+		tile_list[i].cluster_id = cluster_id
+	
+	return
+
+def SaveImages(tile_list, num_clusters, out_dir_path, in_im_filename, in_im_file_ext):
 	if tile_list == []:
 		return
 	
 	try:
 		if not os.path.exists(out_dir_path):
 			os.makedirs(out_dir_path)
+		
+		if num_clusters > 1:
+			for i in range(num_clusters):
+				os.makedirs(os.path.join(out_dir_path, str(i)))
 	except OSError as e:
 		Log(ERR, str(err))
 		return []
 	
 	for tile in tile_list:
-		new_im_path = os.path.join(out_dir_path, in_im_filename) + '_' + str(tile.y) + '_' + str(tile.x) + in_im_file_ext
+		new_im_file_name = in_im_filename + '_' + str(tile.y) + '_' + str(tile.x) + in_im_file_ext
+		if num_clusters > 1:
+			new_im_path = os.path.join(out_dir_path, str(tile.cluster_id), new_im_file_name)
+		else:
+			new_im_path = os.path.join(out_dir_path, new_im_file_name)
 		
 		try:
 			tile.im.save(new_im_path)
@@ -354,10 +400,13 @@ def Main():
 		
 	#Crop
 	tile_list = Crop(dblk_im, crop_size)
+	
+	#Cluster
+	FindClusters(tile_list, args.num_clusters)
 
 	#Save
 	(in_im_filename, in_im_file_ext) = os.path.splitext(args.in_im_path)
-	SaveImages(tile_list, args.out_dir_path, in_im_filename, in_im_file_ext)
+	SaveImages(tile_list, args.num_clusters, args.out_dir_path, in_im_filename, in_im_file_ext)
 	
 	CloseLog()
 	
